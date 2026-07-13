@@ -632,7 +632,14 @@ function newMsg(text, add) {
 function updateStatus(args) {
     prevMsgsOffset = 1; // workaround to reset prev message scrolling when a turn passes
     status.innerHTML = "";
-    const { statusMap, condsMap } = args[0];
+    const statusMapUpdate = args[0].statusMap;
+    const condsMapUpdate = args[0].condsMap;
+    for (const field of Object.keys(statusMapUpdate)) {
+        statusMap[field] = statusMapUpdate[field];
+    }
+    for (const field of Object.keys(condsMapUpdate)) {
+        condsMap[field] = condsMapUpdate[field];
+    }
     for (const field of Object.keys(statusMap)) {
         status.innerHTML += `${field}: ${statusMap[field] || "-"} `;
     }
