@@ -1,0 +1,2129 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <title>Nethack Player</title>
+    <style>
+        * {
+            touch-action: manipulation;
+        }
+        html {
+            position: relative;
+            min-height: 100%;
+            height: 100%;
+        }
+        body {
+            background-color: #222;
+            color: white;
+            font-family: Courier, monospace;
+            font-size: 20px;
+            user-select: none;
+            margin: 0;
+            padding: 0;
+        }
+        #root {
+            background-color: black;
+        }
+        #root div {
+            float: left;
+            width: 12px;
+            height: 22px;
+        }
+        #menus p {
+            margin: 0;
+            padding: 0;
+        }
+        #msg {
+            white-space: pre;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+        }
+        #header {
+            background-color: black;
+            position: absolute;
+            margin: 0;
+            padding: 0;
+            border: 1px solid lightgray;
+            overflow: auto;
+            overscroll-behavior: contain;
+            font-size: 10px;
+            z-index: 2;
+        }
+        #footerMsg {
+            background-color: black;
+            font-size: 16px;
+            white-space: pre-wrap;
+            position: absolute;
+            margin: 0;
+            padding: 0;
+            border: 1px solid lightgray;
+            overflow: auto;
+            overscroll-behavior: contain;
+            z-index: 2;
+        }
+        #footer {
+            background-color: black;
+            position: absolute;
+            margin: 0;
+            padding: 0;
+            border: 1px solid lightgray;
+            overflow-x: auto;
+            overflow-y: hidden;
+            overscroll-behavior: contain;
+            display: flex;
+            flex-direction: row;
+            z-index: 2;
+        }
+        #dialog {
+            position: absolute;
+            margin: 0;
+            padding: 0;
+            border: 1px solid lightgray;
+            overflow: scroll;
+            overscroll-behavior: contain;
+            font-size: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 3;
+        }
+        #padDiv {
+            height: 0;
+            width: 0;
+            margin: 0;
+            padding: 0;
+        }
+        #padDiv2 {
+            height: 0;
+            width: 0;
+            margin: 0;
+            padding: 0;
+        }
+        #floatBtn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: absolute;
+            margin: 0;
+            padding: 0;
+            border: 1px solid darkgray;
+            z-index: 10;
+            background-color: black;
+        }
+        #upload {
+            z-index: 20;
+            position: absolute;
+        }
+    </style>
+  </head>
+  <body>
+    <input type="file" id="upload"></div>
+    <div id="header"></div>
+    <div id="footerMsg"></div>
+    <div id="footer"></div>
+    <div id="dialog"></div>
+    <div id="floatBtn"></div>
+    <div id="container">
+        <div id="status"></div>
+        <div id="padDiv"></div>
+        <div id="root"></div>
+        <div id="msg"></div>
+        <div id="menus"></div>
+        <div id="padDiv2"></div>
+    </div>
+  </body>
+  <script type="module">
+
+let mobile = true;
+const flags = document.location.hash.replaceAll("#", ";").split(";");
+for (const flag of flags) {
+    if (flag === "pc") {
+        mobile = false;
+    }
+}
+
+let skipInput = "";
+let skip;
+let paused = false;
+let pauseResolve;
+let pausePromise = Promise.resolve();
+let mobileKbOn = false;
+let shift = false;
+let ctrl = false;
+let meta = false;
+let dialogOn = false;
+let floatBtnOn = false;
+let footerHeight = 0;
+let winCount = 0;
+const windows = [];
+let touchTimer;
+let btnTouchTimer;
+const touchStart = {};
+let disableClick = false;
+let disableClickTimer;
+const autoQueue = [];
+const autoCodeQueue = [];
+const autoLookMsgs = [];
+let autoLookAction = false;
+let autoTravelTarget;
+let lastHandledKeyCodes = [];
+let inputResolve;
+let isCmdInput = false;
+let cmdInput = "";
+let menuOptionForInput = "";
+let openKbPage = -1;
+let prevKbState = -1;
+const rowno = 21;
+const colno = 80;
+let curs;
+let cursColor = "darkgreen";
+const colorsByCoords = {};
+const bgColorsByCoords = {};
+const selectorsByMenu = {};
+const groupSelectorsByMenu = {};
+const incSelectionsByMenu = {};
+const openPageByWindow = {};
+const statusMap = {};
+let condsMap = {};
+const prevMsgs = [];
+let prevMsgsOffset = 1;
+let skipMsgSaves = false;
+let msg = document.getElementById("msg");
+const root = document.getElementById("root");
+let menus = document.getElementById("menus");
+let status = document.getElementById("status");
+const header = document.getElementById("header");
+const footer = document.getElementById("footer");
+const footerMsg = document.getElementById("footerMsg");
+const dialog = document.getElementById("dialog");
+const floatBtn = document.getElementById("floatBtn");
+const padDiv = document.getElementById("padDiv");
+const padDiv2 = document.getElementById("padDiv2");
+const upload = document.getElementById("upload");
+
+upload.onchange = e => {
+    const loader = new FileReader();
+    loader.onload = async le => {
+        if (le.target.readyState !== 2 || le.target.error) {
+            return;
+        }
+        upload.style.display = "none";
+        const dataParsed = le.target.result.trim().split('\n').map(d => JSON.parse(d));
+        for (const d of dataParsed) {
+            if (skip) {
+                skip--;
+            }
+            if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
+                if (!skip) {
+                    await new Promise(r => setTimeout(r, 300));
+                }
+            } else if (d.name !== "shim_print_glyph") {
+                // await new Promise(r => setTimeout(r, 10));
+            }
+            await callback(d.name, ...d.args);
+            if (paused) {
+                await pausePromise;
+            }
+        }
+    }
+    loader.readAsText(e.target.files[0]);
+}
+
+document.addEventListener("keydown", e => {
+    if (e.key === " ") {
+        if (paused) {
+            pauseResolve();
+        } else {
+            pausePromise = new Promise(r => { pauseResolve = r; });
+        }
+        paused = !paused;
+    } else if (e.key === "Escape") {
+        skipInput = "";
+    } else if (e.key === "ArrowRight") {
+        const n = Number(skipInput)
+        skipInput = "";
+        if (n && !isNaN(n)) {
+            skip = n;
+        }
+    } else {
+        skipInput += e.key;
+    }
+});
+
+if (mobile) {
+    msg = footerMsg;
+    menus = dialog;
+    status = header;
+    document.body.style.position = "fixed";
+    window.visualViewport.onresize = adjustFixedDivs;
+    window.visualViewport.onscroll = adjustFixedDivs;
+    createMobileControls();
+    adjustFixedDivs();
+    document.addEventListener("touchstart", e => {
+        if ([header, footerMsg, footer, dialog].some(el => el.contains(e.target))
+            || e.touches.length > 1 || floatBtnOn 
+        ) {
+            return;
+        }
+        const coords = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        touchStart.x = coords.x;
+        touchStart.y = coords.y;
+        const key = getDirectionKeyChar(coords).toUpperCase();
+        clearTimeout(touchTimer);
+        touchTimer = setTimeout(() => {
+            disableClick = true; // prevent click from this same event
+            disableClickTimer = setTimeout(() => { disableClick = false; }, 500);
+            if (autoTravelIfPan(coords)) {
+                return;
+            }
+            handleKey(key);
+        }, 500);
+    });
+    document.addEventListener("touchmove", e => {
+        clearTimeout(touchTimer);
+        if ([header, footerMsg, footer, dialog].some(el => el.contains(e.target))
+            || e.touches.length > 1
+        ) {
+            return;
+        }
+        // allow scrolling map back into view if hidden by centering margin
+        const rect = root.getBoundingClientRect();
+        const touchX = e.touches[0].clientX;
+        const touchY = e.touches[0].clientY;
+        const { offsetTop, offsetLeft, height, width, scale } = window.visualViewport;
+        const padX = (width / 3);
+        const padY = (height / 3);
+        const tolerance = 10;
+        const scrollingPastStartX = touchX > touchStart.x && rect.x < padX && offsetLeft <= tolerance;
+        const scrollingPastEndX = touchX < touchStart.x && rect.x + rect.width > (window.innerWidth - padX)
+            && (offsetLeft + width) >= window.innerWidth - tolerance;
+        const scrollingPastStartY = touchY > touchStart.y && rect.y < padY && offsetTop <= tolerance;
+        const scrollingPastEndY = touchY < touchStart.y && rect.y + rect.height > (window.innerHeight - padY)
+            && (offsetTop + height) >= window.innerHeight - tolerance;
+        if (scrollingPastStartX || scrollingPastEndX) {
+            const prevMarginLeft = Number(root.style.marginLeft?.slice(0, -2));
+            const adjustAmount = touchX - touchStart.x;
+            root.style.marginLeft = `${prevMarginLeft + adjustAmount}px`;
+        }
+        if (scrollingPastStartY || scrollingPastEndY) {
+            const prevMarginTop = Number(root.style.marginTop?.slice(0, -2));
+            const adjustAmount = touchY - touchStart.y;
+            root.style.marginTop = `${prevMarginTop + adjustAmount}px`;
+        }
+        touchStart.x = touchX;
+        touchStart.y = touchY;
+    });
+    document.addEventListener("touchend", e => {
+        clearTimeout(touchTimer);
+    });
+    document.addEventListener("click", e => {
+        if ([header, footerMsg, footer, dialog].some(el => el.contains(e.target)) || disableClick || floatBtnOn) {
+            return;
+        }
+        if (inputResolve) {
+            const key = getDirectionKeyChar(e);
+            const closestAnd2ndClosest = getClosestAnd2ndClosestCell(e);
+            if (curs === closestAnd2ndClosest.closest || curs === closestAnd2ndClosest.secondClosest) {
+                autoLookAction = true;
+                inputResolve(":".charCodeAt(0));
+                updateLastHandled(":".charCodeAt(0));
+            } else {
+                inputResolve(key.charCodeAt(0));
+                updateLastHandled(key.charCodeAt(0));
+            }
+        }
+    });
+    floatBtn.onclick = () => {
+        if (dialogOn) {
+            dialog.style.display = "none";
+            dialogOn = false;
+            floatBtn.innerHTML = "+";
+        } else {
+            initDialog();
+            adjustFixedDivs();
+        }
+    };
+    floatBtn.style.display = "none";
+} else {
+    header.style.display = "none";
+    footerMsg.style.display = "none";
+    footer.style.display = "none";
+    dialog.style.display = "none";
+    floatBtn.style.display = "none";
+    document.onkeydown = e => handleKey(e.key, e.ctrlKey, e.altKey, e.location === 3);
+}
+
+for (let i = 0; i < rowno; i++) {
+    for (let j = 0; j < colno; j++) {
+        const div = document.createElement("div");
+        div.id = `${j + 1}_${i}`;
+        root.appendChild(div);
+    }
+}
+
+root.style.width = `${colno * 12}px`;
+
+async function callback(name, ...args) {
+    let key;
+    let id;
+    let menu;
+    let menuText;
+    let textId;
+    let cmdIdx;
+
+    switch(name) {
+        case "shim_player_selection_or_tty":
+            return true;
+        case "shim_delay_output":
+            if (!skip) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+            return 0;
+        case "shim_putstr":
+        case "shim_putmixed":
+            id = `menu_${args[0]}`;
+            menu = document.getElementById(id);
+            if (mobile && menu) {
+                menu.style.flex = "1";
+                textId = `${id}_text`;
+                menuText = document.getElementById(textId);
+                if (!menuText) {
+                    menuText = document.createElement("div");
+                    menuText.id = textId;
+                    menu.appendChild(menuText);
+                }
+                menuText.innerHTML += "\n" + args[2];
+            } else {
+                newMsg(args[2], true);
+            }
+            return 0;
+        case "shim_raw_print":
+        case "shim_raw_print_bold":
+            newMsg(args[0], true);
+            return 0;
+        case "shim_status_update":
+            updateStatus(args);
+            return 0;
+        case "shim_print_glyph":
+            const x = args[1];
+            const y = args[2];
+            const c = args[3].c;
+            const color = args[3].color;
+            const bgColor = args[3].bgColor;
+            document.getElementById(`${x}_${y}`).innerHTML = c;
+            document.getElementById(`${x}_${y}`).style.color = color;
+            document.getElementById(`${x}_${y}`).style.backgroundColor = bgColor;
+            colorsByCoords[`${x}_${y}`] = color;
+            bgColorsByCoords[`${x}_${y}`] = bgColor;
+            return 0;
+        case "shim_curs":
+            if (curs) {
+                curs.style.color = colorsByCoords[curs.id] || "";
+                curs.style.backgroundColor = bgColorsByCoords[curs.id] || "";
+            }
+            curs = document.getElementById(`${args[1]}_${args[2]}`);
+            curs.style.color = "black";
+            curs.style.backgroundColor = cursColor;
+            centerIfMobile();
+            return 0;
+        case "shim_create_nhwindow":
+            winCount++;
+            const w = { id: winCount, type: args[0], selections: {} };
+            windows.push(w);
+            if (w.type === nethackGlobal.constants.WIN_TYPE.NHW_MENU) {
+                id = `menu_${w.id}`;
+                getOrCreateMenu(id);
+            }
+            return winCount;
+        case "shim_yn_function":
+            const options = getYnOptions(args);
+            const useDialog = mobile && options;
+            if (useDialog) {
+                openYnDialog(args[0], options);
+            } else {
+                let endStr = args[1] ? " [" + args[1] + "]" : ""; 
+                newMsg(args[0] + endStr, true);
+            }
+            if (!skip) {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            if (useDialog) {
+                document.getElementById("yn_elem")?.remove();
+                closeDialogIfEmpty();
+            } else {
+                newMsg("");
+            }
+            return key;
+        case "shim_nhgetch":
+        case "shim_nh_poskey":
+            newMsg("");
+            return key;
+        case "shim_getmsghistory":
+            return "";
+        case "putmsghistory":
+            return 0;
+        case "shim_doprev_message":
+            newMsg("");
+            if (prevMsgs.length - prevMsgsOffset >= 0) {
+                skipMsgSaves = true;
+                msg.innerHTML = prevMsgs[prevMsgs.length - prevMsgsOffset];
+                prevMsgsOffset++;
+            }
+            return 0;
+        case "shim_get_ext_cmd":
+            return -1;
+        case "shim_getlin":
+            newMsg(args[0], true);
+            if (!skip) {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            newMsg("");
+            return 0;
+        case "shim_display_nhwindow":
+            id = `menu_${args[0]}`;
+            menu = document.getElementById(id);
+            if (/* args[1] &&  */mobile && menu) { // for now block always
+                openDialog(args[0]);
+                addBaseDialogOptions(args[0]);
+                if (!skip) {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            }
+            return 0;
+        case "shim_destroy_nhwindow":
+            destroyMenu(args[0]);
+            const idx = windows.findIndex(w => w.id === args[0]);
+            if (idx !== -1) {
+                windows.splice(idx, 1);
+            }
+            return 0;
+        case "shim_start_menu":
+            if (args[1] === 1) {
+                windows.find(w => w.id === args[0]).permInventory = true;
+                id = `menu_${args[0]}`;
+                menu = document.getElementById(id);
+                if (menu) {
+                    destroyMenu(args[0]); // no perm inventory for now
+                }
+            }
+            return 0;
+        case "shim_add_menu":
+            if (windows.find(w => w.id === args[0]).permInventory) {
+                return 0;
+            }
+            addMenuLine(args);
+            return 0;
+        case "shim_select_menu":
+            if (windows.find(w => w.id === args[0]).permInventory) {
+                return 0;
+            }
+            id = `menu_${args[0]}`;
+            menu = document.getElementById(id);
+            if (menu && mobile) {
+                openDialog(args[0]);
+            }
+            if (!skip) {
+                await new Promise(r => setTimeout(r, 500));
+            }
+            destroyMenu(args[0]);
+            return -1;
+        case "shim_end_menu":
+            id = `menu_${args[0]}`;
+            menuText = document.getElementById(`${id}_text`);
+            if (menuText) {
+                menuText.innerHTML += "\n" + args[1];
+            }
+            return 0;
+        case "shim_clear_nhwindow":
+            if (windows.find(w => w.type === nethackGlobal.constants.WIN_TYPE.NHW_MAP)?.id === args[0]) {
+                clearMap();
+            }
+            return 0;
+        case "shim_exit_nhwindows":
+            clearMap();
+            newMsg(args[0], true);
+            windows.splice(0, windows.length); // need custom handling since actually continue without reload
+            winCount = 0;
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+function clearMap() {
+    for (let i = 0; i < rowno; i++) {
+        for (let j = 0; j < colno; j++) {
+            const e = document.getElementById(`${j + 1}_${i}`);
+            if (e) {
+                e.innerHTML = "";
+                e.style.backgroundColor = "";
+            }
+        }
+    }
+}
+
+function newMsg(text, add) {
+    if (text) {
+        prevMsgsOffset = 1;
+        skipMsgSaves = false;
+    }
+    if (msg.innerHTML && !text && !skipMsgSaves) {
+        prevMsgs.push(msg.innerHTML);
+    }
+    if (add) {
+        if (mobile && msg.innerHTML === "") {
+            msg.innerHTML += text;
+        } else {
+            msg.innerHTML += "\n" + text;
+        }
+    } else {
+        msg.innerHTML = text;
+    }
+}
+
+function updateStatus(args) {
+    prevMsgsOffset = 1; // workaround to reset prev message scrolling when a turn passes
+    status.innerHTML = "";
+    const { statusMap, condsMap } = args[0];
+    for (const field of Object.keys(statusMap)) {
+        status.innerHTML += `${field}: ${statusMap[field] || "-"} `;
+    }
+    for (const cond of Object.keys(condsMap)) {
+        if (condsMap[cond]) {
+            status.innerHTML += `${cond} `;
+        }
+    }
+    if (statusMap["Hpmax"]) {
+        const healthPercent = Number(statusMap["Hp"]) / Number(statusMap["Hpmax"]);
+        if (healthPercent > 0.75) {
+            cursColor = "darkgreen";
+        } else if (healthPercent > 0.5) {
+            cursColor = "yellow";
+        } else if (healthPercent > 0.25) {
+            cursColor = "orange";
+        } else {
+            cursColor = "red";
+        }
+        if (curs) {
+            curs.style.backgroundColor = cursColor;
+        }
+    }
+}
+
+function getOrCreateMenu(id) {
+    let menu = document.getElementById(id);
+    if (!menu) {
+        menu = document.createElement("div");
+        menu.id = id;
+        menu.style.whiteSpace = "pre-wrap";
+        menu.style.display = "flex";
+        menu.style.flexDirection = "column";
+        menu.style.justifyContent = "end";
+        menus.appendChild(menu);
+    }
+    return menu;
+}
+
+function destroyMenu(windowId) {
+    const id = `menu_${windowId}`;
+    const menu = document.getElementById(id);
+    if (menu) {
+        delete selectorsByMenu[id];
+        delete groupSelectorsByMenu[id];
+        delete incSelectionsByMenu[id];
+        delete openPageByWindow[windowId];
+        menu.remove();
+    }
+    closeDialogIfEmpty();
+}
+
+function addMenuLine(args) {
+    let id = `menu_${args[0]}`;
+    let textId = `${id}_text`;
+    let menu = getOrCreateMenu(id);
+    menu.style.flex = "1";
+    let menuText = document.getElementById(textId);
+    if (!menuText) {
+        menuText = document.createElement("div");
+        menuText.id = textId;
+        menu.appendChild(menuText);
+    }
+    let isPreSelect = args[8] & 0x00000001;
+    let separator = isPreSelect ? " + " : " - ";
+    if (!args[2]) {
+        separator = "";
+    }
+    let selector = "";
+    const prevPage = (selectorsByMenu[id] || [])[0]?.page || 0;
+    let page = prevPage;
+    let group = args[4] ? args[4] : undefined;
+    if (args[3]) {
+        selector = args[3] ? String.fromCharCode(args[3]) : "";
+    } else if (args[2]) { // selectable but need to handle selector options manually
+        if (!selectorsByMenu[id]) {
+            selector = getNextChar();
+            selectorsByMenu[id] = [{ selector, page: 0 }];
+        } else {
+            selector = getNextChar(selectorsByMenu[id][0].selector);
+            page = selector === "a" ? prevPage + 1 : prevPage;
+            selectorsByMenu[id].unshift({ selector, page });
+        }
+    }
+    if (isPreSelect) {
+        if (!incSelectionsByMenu[id]) {
+            incSelectionsByMenu[id] = [];
+        }
+        incSelectionsByMenu[id].push({ selector, page });
+    }
+    if (selector !== "") {
+        windows.find(w => w.id === args[0]).selections[`${selector}_${page}`] = { id: args[2], group };
+    }
+    const text = selector + separator + escapeHtmlWrite(args[7]);
+    if (mobile) {
+        if (!groupSelectorsByMenu[id]) {
+            groupSelectorsByMenu[id] = [];
+        }
+        // lines with no selector are titles, clicking them should trigger the group selector of all
+        // the later lines before another text (Note: just assumes it will be the same for them all)
+        const groupSelectorIdx = groupSelectorsByMenu[id].length;
+        if (selector) {
+            addDialogOption(selector, page, text, menu);
+            if (group && groupSelectorsByMenu[id][groupSelectorIdx - 1] !== group) {
+                groupSelectorsByMenu[id].push(group);
+            }
+        } else {
+            addDialogOption(selector, page, text, menu, e => {
+                const groupCode = groupSelectorsByMenu[id][groupSelectorIdx];
+                if (isCmdInput || !groupCode) {
+                    return;
+                }
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                handleKey(String.fromCharCode(groupCode));
+            }, true);
+        }
+    } else {
+        if (selector) {
+            menuText.innerHTML += `<p class="page_${page}">${text}</p>`;
+        } else {
+            menuText.innerHTML += `<p class="page_${page} menu_text">${text}</p>`;
+        }
+    }
+}
+
+function addBaseDialogOptions(windowId) {
+    const id = `menu_${windowId}`;
+    const menu = document.getElementById(id);
+    if (menu) {
+        for (const option of ['Enter', 'Escape']) {
+            addDialogOption(option, -1, option, menu);
+        }
+    }
+}
+
+function openDialog(windowId) {
+    const id = `menu_${windowId}`;
+    const menu = document.getElementById(id);
+    if (menu) {
+        initDialog();
+        initFloatBtn();
+        adjustFixedDivs();
+    }
+}
+
+function getYnOptions(args) {
+    let options;
+    if (args[1]) {
+        options = args[1].split("")
+    } else {
+        // for some reason sometimes options are in the question
+        // (accept only if all are letters and only one bracket pair)
+        if ((args[0].match(/\[/g) || []).length === 1) {
+            options = args[0].split("[")?.[1]?.split("]")?.[0].split("");
+        }
+        if (options?.some(o => o.toLowerCase() === o.toUpperCase())) {
+            options = undefined;
+        }
+    }
+    return options;
+}
+
+function openYnDialog(text, options) {
+    initDialog();
+    initFloatBtn();
+    const ynEl = getOrCreateMenu("yn_elem")
+    ynEl.style.flex = "1";
+    const ynElText = document.createElement("div");
+    ynElText.innerHTML = text;
+    ynEl.appendChild(ynElText);
+    for (const option of options) {
+        addDialogOption(option, -1, option, ynEl);
+    }
+    adjustFixedDivs();
+}
+
+function openExtDialog() {
+    initDialog();
+    initFloatBtn();
+    const extEl = document.createElement("div");
+    extEl.id = "ext_elem";
+    dialog.appendChild(extEl);
+    addDialogOption("Escape", -1, "Escape", extEl, e => {
+        e.stopPropagation(); // prevent being detected as direction click
+        e.stopImmediatePropagation();
+        document.getElementById("ext_elem")?.remove();
+        closeDialogIfEmpty();
+    });
+    for (const option of getExtCmds().filter(cmd => !wizModeCmds.includes(cmd) && !cmd.startsWith("wiz"))) {
+        addDialogOption(option, -1, `#${option}`, extEl, e => {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            if (inputResolve) {
+                inputResolve("#".charCodeAt(0));
+                autoQueue.splice(0, autoQueue.length);
+                autoQueue.push(option);
+            }
+            document.getElementById("ext_elem")?.remove();
+            closeDialogIfEmpty();
+        });
+    }
+    adjustFixedDivs();
+}
+
+function addDialogOption(option, page, text, menu, cb, onlyText) {
+    const el = document.createElement("div");
+    if (!onlyText) {
+        el.style.border = "1px solid lightgray";
+    } else {
+        el.classList.add("menu_text");
+    }
+    el.classList.add(`page_${page}`);
+    el.style.backgroundColor = "black";
+    el.style.display = "flex";
+    el.style.flexDirection = "column";
+    el.style.justifyContent = "center";
+    el.style.alignItems = "start";
+    el.style.padding = "10px";
+    el.style.margin = "5px";
+    el.innerHTML = text;
+    if (cb) {
+        el.onclick = e => {
+            if (isCmdInput) {
+                return;
+            }
+            cb(e);
+        };
+    } else {
+        el.onclick = e => {
+            if (isCmdInput) {
+                return;
+            }
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            handleKey(option);
+        };
+        if (page !== -1) {
+            el.ontouchstart = e => {
+                if (isCmdInput) {
+                    return;
+                }
+                clearTimeout(btnTouchTimer);
+                btnTouchTimer = setTimeout(() => enableMenuKbInput(option), 500);
+            };
+            el.ontouchmove = e => { clearTimeout(btnTouchTimer); };
+            el.ontouchend = e => { clearTimeout(btnTouchTimer); };
+        }
+    }
+    menu.appendChild(el);
+    return el;
+}
+
+function enableMenuKbInput(option) {
+    if (!mobileKbOn) {
+        prevKbState = -1;
+    } else {
+        prevKbState = openKbPage;
+    }
+    mobileKbOn = true;
+    createKb(3);
+    adjustFixedDivs();
+    footer.style.zIndex = 4;
+    msg.style.zIndex = 4;
+    isCmdInput = true;
+    menuOptionForInput = option.charCodeAt(0);
+    newMsg("");
+}
+
+function endMenuKbInput() {
+    if (prevKbState === -1) {
+        mobileKbOn = false;
+        createMobileControls();
+    } else {
+        mobileKbOn = true;
+        createKb(prevKbState);
+    }
+    adjustFixedDivs();
+    centerIfMobile();
+    cmdInput = "";
+    menuOptionForInput = "";
+    newMsg("");
+    isCmdInput = false;
+    footer.style.zIndex = 2;
+    msg.style.zIndex = 2;
+}
+
+function initDialog() {
+    // ugly hack to not trigger the annoying tap + scroll zoom
+    // (present at least on Android Chrome)
+    document.body.style.touchAction = "pan-y";
+    setTimeout(() => { document.body.style.touchAction = ""; }, 500);
+    dialog.style.display = "";
+    dialog.scrollTop = 0;
+    dialogOn = true;
+    floatBtn.innerHTML = "-";
+}
+
+function initFloatBtn() {
+    floatBtnOn = true;
+    floatBtn.style.display = "";
+}
+
+function closeDialogIfEmpty() {
+    if (mobile && !Array.from(dialog.children).some(el => el.id?.startsWith("menu"))) {
+        dialogOn = false;
+        dialog.innerHTML = "";
+        dialog.style.display = "none";
+        floatBtnOn = false;
+        floatBtn.style.display = "none";
+        adjustFixedDivs();
+    }
+}
+
+function createMobileControls() {
+    const chars = ['Kb', 'Ext', 'Redo', 'OPTS'];
+    footer.innerHTML = "";
+    footer.style.flexDirection = "row";
+    for (const char of chars) {
+        const el = document.createElement("div");
+        el.style.display = "flex";
+        el.style.flexDirection = "column";
+        el.style.justifyContent = "center";
+        el.style.alignItems = "center";
+        el.style.padding = "10px";
+        el.style.margin = "5px";
+        el.style.aspectRatio = "1 / 1";
+        el.style.border = "1px solid lightgray";
+        el.style.backgroundColor = "black";
+        el.innerHTML = char;
+        el.onclick = e => {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            if (char === 'Kb') {
+                mobileKbOn = !mobileKbOn;
+                createKb();
+                adjustFixedDivs();
+                centerIfMobile();
+            } else if (char === 'Ext' && !isCmdInput) {
+                openExtDialog();
+            } else if (char === 'Redo' && !isCmdInput) {
+                if (inputResolve) {
+                    const codes = [...lastHandledKeyCodes];
+                    codes.pop(); // remove the non-number input at the end
+                    if (codes.length) {
+                        inputResolve(codes.shift());
+                        autoQueue.push(...(codes.map(c => String.fromCharCode(c))));
+                        autoCodeQueue.push(1); // Ctrl + A
+                    } else {
+                        inputResolve(1); // Ctrl + A
+                    }
+                }
+            } else if (char === 'OPTS') {
+                const newOpts = prompt('Give new nethack configuration options to be saved (as "OPTIONS=...")');
+                if (newOpts) {
+                    localStorage.setItem('nethackOptions', newOpts);
+                }
+            }
+        };
+        footer.appendChild(el);
+    }
+}
+
+function createKb(idx = 0) {
+    openKbPage = idx;
+    const keys = [
+        [
+            ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+            ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+            ['Ctrl', 'Shift', 'z', 'x', 'c', 'v', 'b', 'n', 'm'],
+            ['Kb', 'Sym', '123', 'Spc', 'Esc', 'Entr']
+        ],
+        [
+            ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+            ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+            ['Ctrl', 'Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M'],
+            ['Kb', 'Sym', '123', 'Spc', 'Esc', 'Entr']
+        ],
+        [
+            ['`', '\\', '$', '=', '/', '_', '<', '>', '[', ']'],
+            ['!', '@', '#', '?', '%', '^', '&', '*', '(', ')'],
+            ['Ctrl', 'Mt', '-', '\'', '"', ':', ';', ',', '.'],
+            ['Kb', 'abc', '123', '+', 'Esc', 'Entr']
+        ],
+        [
+            ['7', '8', '9'],
+            ['4', '5', '6'],
+            ['1', '2', '3'],
+            ['Kb', 'abc', '0', 'Del', 'Esc', 'Entr']
+        ]
+    ];
+    footer.innerHTML = "";
+    footer.style.flexDirection = "column";
+    for (const row of keys[idx]) {
+        const rowEl = document.createElement("div");
+        rowEl.style.display = "flex";
+        rowEl.style.flexDirection = "row";
+        rowEl.style.justifyContent = "space-between";
+        rowEl.style.position = "relative";
+        for (const char of row) {
+            const el = document.createElement("div");
+            el.style.display = "flex";
+            el.style.flexDirection = "column";
+            el.style.justifyContent = "center";
+            el.style.alignItems = "center";
+            el.style.width = "100%";
+            el.style.height = "100%";
+            el.style.overflow = "hidden";
+            el.style.border = "1px solid lightgray";
+            el.style.backgroundColor = "black";
+            if ((idx === 1 && char === 'Shift') || (ctrl && char === 'Ctrl') || (meta && char === 'Mt')) {
+                el.style.backgroundColor = "#555";
+            }
+            el.innerHTML = char;
+            el.onclick = e => {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (char === 'Kb') {
+                    mobileKbOn = !mobileKbOn;
+                    createMobileControls();
+                    adjustFixedDivs();
+                    centerIfMobile();
+                } else if (char === 'Shift') {
+                    if (idx === 0) {
+                        createKb(1);
+                    } else {
+                        createKb(0);
+                    }
+                    adjustFixedDivs();
+                } else if (char === 'Ctrl') {
+                    ctrl = !ctrl;
+                    el.style.backgroundColor = ctrl ? "#555" : "black";
+                } else if (char === 'Mt') {
+                    meta = !meta;
+                    el.style.backgroundColor = meta ? "#555" : "black";
+                } else if (char === 'Sym') {
+                    createKb(2);
+                    adjustFixedDivs();
+                } else if (char === 'abc') {
+                    createKb(0);
+                    adjustFixedDivs();
+                } else if (char === '123') {
+                    createKb(3);
+                    adjustFixedDivs();
+                } else {
+                    el.style.backgroundColor = "#555";
+                    setTimeout(() => {
+                        el.style.backgroundColor = "black";
+                    }, 100);
+                    if (idx === 1) {
+                        createKb(0);
+                        adjustFixedDivs();
+                    }
+                    if (char === 'Esc') {
+                        handleKey('Escape', ctrl, meta);
+                    } else if (char === 'Entr') {
+                        handleKey('Enter', ctrl, meta);
+                    } else if (char === 'Spc') {
+                        handleKey(' ', ctrl, meta);
+                    } else if (char === 'Del') {
+                        if (isCmdInput && cmdInput.length) {
+                            cmdInput = cmdInput.slice(0, -1);
+                            msg.innerHTML = cmdInput;
+                        }
+                    } else {
+                        handleKey(char, ctrl, meta);
+                    }
+                    if (ctrl) {
+                        ctrl = false;
+                        createKb(idx === 1 ? 0 : idx);
+                        adjustFixedDivs();
+                    }
+                    if (meta) {
+                        meta = false;
+                        createKb(idx === 1 ? 0 : idx);
+                        adjustFixedDivs();
+                    }
+                }
+            };
+            rowEl.appendChild(el);
+        }
+        footer.appendChild(rowEl);
+    }
+}
+
+function adjustFixedDivs() {
+    const { offsetTop, offsetLeft, height, width, scale } = window.visualViewport;
+    floatBtn.style.top = `${offsetTop + (height * 0.11)}px`;
+    floatBtn.style.left = `${offsetLeft + (width * 0.93)}px`;
+    floatBtn.style.height = `${width * 0.05}px`;
+    floatBtn.style.width = `${width * 0.05}px`;
+    if (dialogOn) {
+        dialog.style.top = `${offsetTop}px`;
+        dialog.style.left = `${offsetLeft}px`;
+        dialog.style.height = `${height * 0.98}px`;
+        dialog.style.width = `${width * 0.98}px`;
+        for (const el of Array.from(dialog.children)) {
+            el.style.width = `${width * 0.88}px`;
+            el.style.margin = `${width * 0.01}px`;
+            el.style.padding = `${width * 0.02}px`;
+        }
+    }
+    header.style.top = `${offsetTop}px`;
+    header.style.left = `${offsetLeft}px`;
+    header.style.height = `${height * 0.1}px`;
+    header.style.width = `${width * 0.98}px`;
+    if (mobileKbOn) {
+        footerMsg.style.top = `${(offsetTop + (height * 0.43))}px`;
+        footerMsg.style.left = `${offsetLeft}px`;
+        footerMsg.style.height = `${height * 0.15}px`;
+        footerMsg.style.width = `${width * 0.98}px`;
+        footer.style.top = `${(offsetTop + (height * 0.59))}px`;
+        footer.style.left = `${offsetLeft}px`;
+        footer.style.height = `${height * 0.4}px`;
+        footer.style.width = `${width * 0.98}px`;
+        footerHeight = height * 0.4;
+        for (const row of Array.from(footer.children)) {
+            row.style.height = `${height * 0.1}px`;
+            row.style.width = `${width * 0.98}px`;
+        }
+    } else {
+        footerMsg.style.top = `${(offsetTop + (height * 0.74))}px`;
+        footerMsg.style.left = `${offsetLeft}px`;
+        footerMsg.style.height = `${height * 0.15}px`;
+        footerMsg.style.width = `${width * 0.98}px`;
+        footer.style.top = `${(offsetTop + (height * 0.89))}px`;
+        footer.style.left = `${offsetLeft}px`;
+        footer.style.height = `${height * 0.1}px`;
+        footer.style.width = `${width * 0.98}px`;
+        footerHeight = height * 0.1;
+    }
+    const rootHeight = root.getBoundingClientRect().height;
+    padDiv.style.height = `${rootHeight}px`;
+    padDiv.style.width = `10px`;
+    padDiv2.style.height = `${rootHeight}px`;
+    padDiv2.style.width = `10px`;
+}
+
+function getVisualCenter() {
+    return {
+        x: window.visualViewport.width / 2 + window.visualViewport.offsetLeft,
+        y: (window.visualViewport.height - footerHeight) / 2 + window.visualViewport.offsetTop
+    };
+}
+
+function centerIfMobile() {
+    if (mobile && curs) {
+        const center = getVisualCenter();
+        const rect = curs.getBoundingClientRect();
+        const cursX = rect.x + (rect.width / 2);
+        const cursY = rect.y + (rect.height / 2);
+        const prevMarginLeft = Number(root.style.marginLeft?.slice(0, -2));
+        const prevMarginTop = Number(root.style.marginTop?.slice(0, -2));
+        root.style.marginLeft = `${prevMarginLeft + (center.x - cursX)}px`;
+        root.style.marginTop = `${prevMarginTop + (center.y - cursY)}px`;
+    }
+}
+
+function handleKey(inputKey, ctrlKey, metaKey, numPad) {
+    if (inputResolve) {
+        if (isCmdInput) {
+            if (inputKey === 'Enter') {
+                inputResolve(1);
+            } else if (inputKey === 'Escape') {
+                inputResolve(-1);
+            } else if (inputKey.length === 1) {
+                cmdInput += inputKey;
+                // NOTE: history should already be handled
+                msg.innerHTML = cmdInput;
+            }
+        } else if (inputKey.length === 1) {
+            let key = (numPad && {
+                1: 'b',
+                2: 'j',
+                3: 'n',
+                4: 'h',
+                6: 'l',
+                7: 'y',
+                8: 'k',
+                9: 'u',
+            }[inputKey]) || inputKey;
+            let code = key.charCodeAt(0);
+            if (ctrlKey) {
+                code -= 96;
+            } else if (metaKey) {
+                code = 0x80 | code;
+            }
+            inputResolve(code);
+            updateLastHandled(code);
+        } else {
+            let key = {
+                Escape: 27,
+                Enter: 13,
+                End: 'B'.charCodeAt(0),
+                ArrowDown: 'J'.charCodeAt(0),
+                PageDown: 'N'.charCodeAt(0),
+                ArrowLeft: 'H'.charCodeAt(0),
+                ArrowRight: 'L'.charCodeAt(0),
+                Home: 'Y'.charCodeAt(0),
+                ArrowUp: 'K'.charCodeAt(0),
+                PageUp: 'U'.charCodeAt(0)
+            }[inputKey];
+            if (key) {
+                inputResolve(key);
+                updateLastHandled(key);
+            }
+            if (inputKey === 'Escape') {
+                prevMsgsOffset = 1;
+            }
+        }
+    }
+}
+
+function updateLastHandled(code) {
+    let lastCodeIsNotNumber = false;
+    if (lastHandledKeyCodes.length) {
+        const last = lastHandledKeyCodes[lastHandledKeyCodes.length - 1];
+        lastCodeIsNotNumber = last < 48 || last > 57;
+    }
+    if (lastCodeIsNotNumber) {
+        lastHandledKeyCodes = [];
+    }
+    lastHandledKeyCodes.push(code);
+}
+
+function autoTravelIfPan(e) {
+    if (!inputResolve) {
+        return false;
+    }
+    const rect = curs.getBoundingClientRect();
+    const cursX = rect.x + (rect.width / 2);
+    const cursY = rect.y + (rect.height / 2);
+    const tolerance = 10;
+    const center = getVisualCenter();
+    const closestAnd2ndClosest = getClosestAnd2ndClosestCell(e);
+    if (Math.abs(center.x - cursX) > tolerance || Math.abs(center.y - cursY) > tolerance) {
+        autoQueue.splice(0, autoQueue.length);
+        const coords = getCoordsFromElement(closestAnd2ndClosest.closest);
+        const cursCoords = getCoordsFromElement(curs);
+        autoTravelTarget = coords;
+        inputResolve("_".charCodeAt(0));
+        return true;
+    }
+    return false;
+}
+
+function relativeCoordsToDrc(y, x) {
+    if (x === 0) {
+        if (y > 0) return 2; // b
+        return 8; // t
+    } else {
+        let val = y/x;
+
+        if (val > -0.4142 && val < 0.4142) {
+            if (x > 0) return 6; // r
+            return 4; // l
+        } else if (val > -2.4142 && val < -0.4142) {
+            if (x > 0) return 9; // tr
+            return 1; // bl
+        } else if (val > 0.4142 && val < 2.4142) {
+            if (x > 0) return 3; // br
+            return 7; // tl
+        } else {
+            if (y > 0) return 2; // b
+            return 8; // t
+        }
+    }
+}
+
+function getCoordsFromElement(el) {
+    const coords = el.id.split("_");
+    return {
+        x: Number(coords[0]),
+        y: Number(coords[1])
+    };
+}
+
+function getDirectionKeyChar(e) {
+    const rect = curs.getBoundingClientRect();
+    const cursX = rect.x + (rect.width / 2);
+    const cursY = rect.y + (rect.height / 2);
+    const x = e.x - cursX;
+    const y = e.y - cursY;
+    return {
+        1: 'b',
+        2: 'j',
+        3: 'n',
+        4: 'h',
+        6: 'l',
+        7: 'y',
+        8: 'k',
+        9: 'u',
+    }[relativeCoordsToDrc(y, x)];
+}
+
+function getClosestAnd2ndClosestCell(e) {
+    let minDistance;
+    let closest;
+    let secondMinDistance;
+    let secondClosest;
+    for (const el of Array.from(root.children)) {
+        const rect = el.getBoundingClientRect();
+        const y = rect.top + (rect.height / 2);
+        const x = rect.left + (rect.width / 2);
+        const distanceSq = (e.x - x)*(e.x - x) + (e.y - y)*(e.y - y);
+        if (!closest || (distanceSq < minDistance)) {
+            if (minDistance < secondMinDistance) {
+                secondClosest = closest;
+                secondMinDistance = minDistance;
+            }
+            closest = el;
+            minDistance = distanceSq;
+        } else if (!secondClosest || (distanceSq < secondMinDistance)) {
+            secondClosest = el;
+            secondMinDistance = distanceSq;
+        }
+    }
+    return { closest, secondClosest };
+}
+
+function getColor(colorIdx) {
+    const color = nethackGlobal.constants.COLORS[colorIdx];
+    return {
+        CLR_BLACK: "#777",
+        CLR_BLUE: "blue",
+        CLR_BRIGHT_BLUE: "lightblue",
+        CLR_BRIGHT_CYAN: "lightcyan",
+        CLR_BRIGHT_GREEN: "lightgreen",
+        CLR_BRIGHT_MAGENTA: "hotpink",
+        CLR_BROWN: "saddlebrown",
+        CLR_CYAN: "cyan",
+        CLR_GRAY: "lightgray",
+        CLR_GREEN: "green",
+        CLR_MAGENTA: "magenta",
+        CLR_ORANGE: "orange",
+        CLR_RED: "red",
+        CLR_WHITE: "white",
+        CLR_YELLOW: "yellow"
+    }[color] || "";
+}
+
+function getExtCmdIdx(input) {
+    return getExtCmds().indexOf(input);
+}
+
+function getExtCmds() {
+    return [];
+}
+
+function getNextChar(char) {
+    if (!char) {
+        return "a";
+    }
+    const code = char.charCodeAt(0) + 1;
+    if (code > "z".charCodeAt(0)) {
+        return "A";
+    } else if (code > "Z".charCodeAt(0) && code < "a".charCodeAt(0)) {
+        return "a";
+    }
+    return String.fromCharCode(code);
+}
+
+function escapeHtmlWrite(str) {
+    return str
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function escapeHtmlRead(str) {
+    return str
+        .replaceAll("&amp;", "&")
+        .replaceAll("&lt;", "<")
+        .replaceAll("&gt;", ">")
+        .replaceAll("&quot;", '"')
+        .replaceAll("&#039;", "'");
+}
+
+const cp437toUnicode = {
+    0: '�',
+    1: '☺',
+    2: '☻',
+    3: '♥',
+    4: '♦',
+    5: '♣',
+    6: '♠',
+    7: '•',
+    8: '◘',
+    9: '○',
+    10: '◙',
+    11: '♂',
+    12: '♀',
+    13: '♪',
+    14: '♫',
+    15: '☼',
+    16: '►',
+    17: '◄',
+    18: '↕',
+    19: '‼',
+    20: '¶',
+    21: '§',
+    22: '▬',
+    23: '↨',
+    24: '↑',
+    25: '↓',
+    26: '→',
+    27: '←',
+    28: '∟',
+    29: '↔',
+    30: '▲',
+    31: '▼',
+    32: '	',
+    33: '!',
+    34: '"',
+    35: '#',
+    36: '$',
+    37: '%',
+    38: '&',
+    39: '\'',
+    40: '(',
+    41: ')',
+    42: '*',
+    43: '+',
+    44: ',',
+    45: '-',
+    46: '.',
+    47: '/',
+    48: '0',
+    49: '1',
+    50: '2',
+    51: '3',
+    52: '4',
+    53: '5',
+    54: '6',
+    55: '7',
+    56: '8',
+    57: '9',
+    58: ':',
+    59: ';',
+    60: '<',
+    61: '=',
+    62: '>',
+    63: '?',
+    64: '@',
+    65: 'A',
+    66: 'B',
+    67: 'C',
+    68: 'D',
+    69: 'E',
+    70: 'F',
+    71: 'G',
+    72: 'H',
+    73: 'I',
+    74: 'J',
+    75: 'K',
+    76: 'L',
+    77: 'M',
+    78: 'N',
+    79: 'O',
+    80: 'P',
+    81: 'Q',
+    82: 'R',
+    83: 'S',
+    84: 'T',
+    85: 'U',
+    86: 'V',
+    87: 'W',
+    88: 'X',
+    89: 'Y',
+    90: 'Z',
+    91: '[',
+    92: '\\',
+    93: ']',
+    94: '^',
+    95: '_',
+    96: '`',
+    97: 'a',
+    98: 'b',
+    99: 'c',
+    100: 'd',
+    101: 'e',
+    102: 'f',
+    103: 'g',
+    104: 'h',
+    105: 'i',
+    106: 'j',
+    107: 'k',
+    108: 'l',
+    109: 'm',
+    110: 'n',
+    111: 'o',
+    112: 'p',
+    113: 'q',
+    114: 'r',
+    115: 's',
+    116: 't',
+    117: 'u',
+    118: 'v',
+    119: 'w',
+    120: 'x',
+    121: 'y',
+    122: 'z',
+    123: '{',
+    124: '|',
+    125: '}',
+    126: '~',
+    127: '⌂',
+    128: 'Ç',
+    129: 'ü',
+    130: 'é',
+    131: 'â',
+    132: 'ä',
+    133: 'à',
+    134: 'å',
+    135: 'ç',
+    136: 'ê',
+    137: 'ë',
+    138: 'è',
+    139: 'ï',
+    140: 'î',
+    141: 'ì',
+    142: 'Ä',
+    143: 'Å',
+    144: 'É',
+    145: 'æ',
+    146: 'Æ',
+    147: 'ô',
+    148: 'ö',
+    149: 'ò',
+    150: 'û',
+    151: 'ù',
+    152: 'ÿ',
+    153: 'Ö',
+    154: 'Ü',
+    155: '¢',
+    156: '£',
+    157: '¥',
+    158: '₧',
+    159: 'ƒ',
+    160: 'á',
+    161: 'í',
+    162: 'ó',
+    163: 'ú',
+    164: 'ñ',
+    165: 'Ñ',
+    166: 'ª',
+    167: 'º',
+    168: '¿',
+    169: '⌐',
+    170: '¬',
+    171: '½',
+    172: '¼',
+    173: '¡',
+    174: '«',
+    175: '»',
+    176: '░',
+    177: '▒',
+    178: '▓',
+    179: '│',
+    180: '┤',
+    181: '╡',
+    182: '╢',
+    183: '╖',
+    184: '╕',
+    185: '╣',
+    186: '║',
+    187: '╗',
+    188: '╝',
+    189: '╜',
+    190: '╛',
+    191: '┐',
+    192: '└',
+    193: '┴',
+    194: '┬',
+    195: '├',
+    196: '─',
+    197: '┼',
+    198: '╞',
+    199: '╟',
+    200: '╚',
+    201: '╔',
+    202: '╩',
+    203: '╦',
+    204: '╠',
+    205: '═',
+    206: '╬',
+    207: '╧',
+    208: '╨',
+    209: '╤',
+    210: '╥',
+    211: '╙',
+    212: '╘',
+    213: '╒',
+    214: '╓',
+    215: '╫',
+    216: '╪',
+    217: '┘',
+    218: '┌',
+    219: '█',
+    220: '▄',
+    221: '▌',
+    222: '▐',
+    223: '▀',
+    224: 'α',
+    225: 'ß',
+    226: 'Γ',
+    227: 'π',
+    228: 'Σ',
+    229: 'σ',
+    230: 'µ',
+    231: 'τ',
+    232: 'Φ',
+    233: 'Θ',
+    234: 'Ω',
+    235: 'δ',
+    236: '∞',
+    237: 'φ',
+    238: 'ε',
+    239: '∩',
+    240: '≡',
+    241: '±',
+    242: '≥',
+    243: '≤',
+    244: '⌠',
+    245: '⌡',
+    246: '÷',
+    247: '≈',
+    248: '°',
+    249: '∙',
+    250: '·',
+    251: '√',
+    252: 'ⁿ',
+    253: '²',
+    254: '■',
+    255: ' ',
+};
+
+window.nethackGlobal = {
+  "helpers": {},
+  "constants": {
+    "WIN_TYPE": {
+      "1": "NHW_MESSAGE",
+      "2": "NHW_STATUS",
+      "3": "NHW_MAP",
+      "4": "NHW_MENU",
+      "5": "NHW_TEXT",
+      "NHW_MESSAGE": 1,
+      "NHW_STATUS": 2,
+      "NHW_MAP": 3,
+      "NHW_MENU": 4,
+      "NHW_TEXT": 5
+    },
+    "STATUS_FIELD": {
+      "0": "BL_TITLE",
+      "1": "BL_STR",
+      "2": "BL_DX",
+      "3": "BL_CO",
+      "4": "BL_IN",
+      "5": "BL_WI",
+      "6": "BL_CH",
+      "7": "BL_ALIGN",
+      "8": "BL_SCORE",
+      "9": "BL_CAP",
+      "10": "BL_GOLD",
+      "11": "BL_ENE",
+      "12": "BL_ENEMAX",
+      "13": "BL_XP",
+      "14": "BL_AC",
+      "15": "BL_HD",
+      "16": "BL_TIME",
+      "17": "BL_HUNGER",
+      "18": "BL_HP",
+      "19": "BL_HPMAX",
+      "20": "BL_LEVELDESC",
+      "21": "BL_EXP",
+      "22": "BL_CONDITION",
+      "27": "MAXBLSTATS",
+      "BL_CHARACTERISTICS": -3,
+      "-3": "BL_CHARACTERISTICS",
+      "BL_RESET": -2,
+      "-2": "BL_RESET",
+      "BL_FLUSH": -1,
+      "-1": "BL_FLUSH",
+      "BL_TITLE": 0,
+      "BL_STR": 1,
+      "BL_DX": 2,
+      "BL_CO": 3,
+      "BL_IN": 4,
+      "BL_WI": 5,
+      "BL_CH": 6,
+      "BL_ALIGN": 7,
+      "BL_SCORE": 8,
+      "BL_CAP": 9,
+      "BL_GOLD": 10,
+      "BL_ENE": 11,
+      "BL_ENEMAX": 12,
+      "BL_XP": 13,
+      "BL_AC": 14,
+      "BL_HD": 15,
+      "BL_TIME": 16,
+      "BL_HUNGER": 17,
+      "BL_HP": 18,
+      "BL_HPMAX": 19,
+      "BL_LEVELDESC": 20,
+      "BL_EXP": 21,
+      "BL_CONDITION": 22,
+      "MAXBLSTATS": 27
+    },
+    "ATTR": {
+      "0": "ATR_NONE",
+      "1": "ATR_BOLD",
+      "2": "ATR_DIM",
+      "4": "ATR_ULINE",
+      "5": "ATR_BLINK",
+      "7": "ATR_INVERSE",
+      "16": "ATR_URGENT",
+      "32": "ATR_NOHISTORY",
+      "ATR_NONE": 0,
+      "ATR_BOLD": 1,
+      "ATR_DIM": 2,
+      "ATR_ULINE": 4,
+      "ATR_BLINK": 5,
+      "ATR_INVERSE": 7,
+      "ATR_URGENT": 16,
+      "ATR_NOHISTORY": 32
+    },
+    "CONDITION": {
+      "1": "BL_MASK_BAREH",
+      "2": "BL_MASK_BLIND",
+      "4": "BL_MASK_BUSY",
+      "8": "BL_MASK_CONF",
+      "16": "BL_MASK_DEAF",
+      "32": "BL_MASK_ELF_IRON",
+      "64": "BL_MASK_FLY",
+      "128": "BL_MASK_FOODPOIS",
+      "256": "BL_MASK_GLOWHANDS",
+      "512": "BL_MASK_GRAB",
+      "1024": "BL_MASK_HALLU",
+      "2048": "BL_MASK_HELD",
+      "4096": "BL_MASK_ICY",
+      "8192": "BL_MASK_INLAVA",
+      "16384": "BL_MASK_LEV",
+      "32768": "BL_MASK_PARLYZ",
+      "65536": "BL_MASK_RIDE",
+      "131072": "BL_MASK_SLEEPING",
+      "262144": "BL_MASK_SLIME",
+      "524288": "BL_MASK_SLIPPERY",
+      "1048576": "BL_MASK_STONE",
+      "2097152": "BL_MASK_STRNGL",
+      "4194304": "BL_MASK_STUN",
+      "8388608": "BL_MASK_SUBMERGED",
+      "16777216": "BL_MASK_TERMILL",
+      "33554432": "BL_MASK_TETHERED",
+      "67108864": "BL_MASK_TRAPPED",
+      "134217728": "BL_MASK_UNCONSC",
+      "268435456": "BL_MASK_WOUNDEDL",
+      "536870912": "BL_MASK_HOLDING",
+      "BL_MASK_BAREH": 1,
+      "BL_MASK_BLIND": 2,
+      "BL_MASK_BUSY": 4,
+      "BL_MASK_CONF": 8,
+      "BL_MASK_DEAF": 16,
+      "BL_MASK_ELF_IRON": 32,
+      "BL_MASK_FLY": 64,
+      "BL_MASK_FOODPOIS": 128,
+      "BL_MASK_GLOWHANDS": 256,
+      "BL_MASK_GRAB": 512,
+      "BL_MASK_HALLU": 1024,
+      "BL_MASK_HELD": 2048,
+      "BL_MASK_ICY": 4096,
+      "BL_MASK_INLAVA": 8192,
+      "BL_MASK_LEV": 16384,
+      "BL_MASK_PARLYZ": 32768,
+      "BL_MASK_RIDE": 65536,
+      "BL_MASK_SLEEPING": 131072,
+      "BL_MASK_SLIME": 262144,
+      "BL_MASK_SLIPPERY": 524288,
+      "BL_MASK_STONE": 1048576,
+      "BL_MASK_STRNGL": 2097152,
+      "BL_MASK_STUN": 4194304,
+      "BL_MASK_SUBMERGED": 8388608,
+      "BL_MASK_TERMILL": 16777216,
+      "BL_MASK_TETHERED": 33554432,
+      "BL_MASK_TRAPPED": 67108864,
+      "BL_MASK_UNCONSC": 134217728,
+      "BL_MASK_WOUNDEDL": 268435456,
+      "BL_MASK_HOLDING": 536870912
+    },
+    "MENU_SELECT": {
+      "0": "PICK_NONE",
+      "1": "PICK_ONE",
+      "2": "PICK_ANY",
+      "PICK_NONE": 0,
+      "PICK_ONE": 1,
+      "PICK_ANY": 2
+    },
+    "COPYRIGHT": {
+      "COPYRIGHT_BANNER_A": "NetHack, Copyright 1985-2026",
+      "COPYRIGHT_BANNER_B": "         By Stichting Mathematisch Centrum and M. Stephenson.",
+      "COPYRIGHT_BANNER_C": "         Version 5.0.0-0 Unix post-release, built Jun 28 2026 10:25:19.",
+      "COPYRIGHT_BANNER_D": "         See license for details."
+    },
+    "GLYPH": {
+      "0": "GLYPH_MON_OFF",
+      "766": "GLYPH_PET_OFF",
+      "1532": "GLYPH_INVISIBLE",
+      "1533": "GLYPH_DETECT_OFF",
+      "2299": "GLYPH_BODY_OFF",
+      "2682": "GLYPH_RIDDEN_OFF",
+      "3448": "GLYPH_OBJ_OFF",
+      "3929": "GLYPH_CMAP_OFF",
+      "4051": "GLYPH_ZAP_OFF",
+      "4093": "GLYPH_SWALLOW_OFF",
+      "7157": "GLYPH_EXPLODE_OFF",
+      "7220": "GLYPH_WARNING_OFF",
+      "7226": "GLYPH_STATUE_OFF",
+      "7992": "GLYPH_PILETOP_OFF",
+      "9622": "GLYPH_UNEXPLORED",
+      "9623": "GLYPH_NOTHING",
+      "9624": "NO_GLYPH",
+      "GLYPH_MON_OFF": 0,
+      "GLYPH_PET_OFF": 766,
+      "GLYPH_INVIS_OFF": 1532,
+      "GLYPH_DETECT_OFF": 1533,
+      "GLYPH_BODY_OFF": 2299,
+      "GLYPH_RIDDEN_OFF": 2682,
+      "GLYPH_OBJ_OFF": 3448,
+      "GLYPH_CMAP_OFF": 3929,
+      "GLYPH_EXPLODE_OFF": 7157,
+      "GLYPH_ZAP_OFF": 4051,
+      "GLYPH_SWALLOW_OFF": 4093,
+      "GLYPH_WARNING_OFF": 7220,
+      "GLYPH_STATUE_OFF": 7226,
+      "GLYPH_PILETOP_OFF": 7992,
+      "GLYPH_UNEXPLORED_OFF": 9622,
+      "GLYPH_NOTHING_OFF": 9623,
+      "MAX_GLYPH": 9624,
+      "NO_GLYPH": 9624,
+      "GLYPH_INVISIBLE": 1532,
+      "GLYPH_UNEXPLORED": 9622,
+      "GLYPH_NOTHING": 9623
+    },
+    "COLORS": {
+      "0": "CLR_BLACK",
+      "1": "CLR_RED",
+      "2": "CLR_GREEN",
+      "3": "CLR_BROWN",
+      "4": "CLR_BLUE",
+      "5": "CLR_MAGENTA",
+      "6": "CLR_CYAN",
+      "7": "CLR_GRAY",
+      "8": "NO_COLOR",
+      "9": "CLR_ORANGE",
+      "10": "CLR_BRIGHT_GREEN",
+      "11": "CLR_YELLOW",
+      "12": "CLR_BRIGHT_BLUE",
+      "13": "CLR_BRIGHT_MAGENTA",
+      "14": "CLR_BRIGHT_CYAN",
+      "15": "CLR_WHITE",
+      "16": "CLR_MAX",
+      "CLR_BLACK": 0,
+      "CLR_RED": 1,
+      "CLR_GREEN": 2,
+      "CLR_BROWN": 3,
+      "CLR_BLUE": 4,
+      "CLR_MAGENTA": 5,
+      "CLR_CYAN": 6,
+      "CLR_GRAY": 7,
+      "NO_COLOR": 8,
+      "CLR_ORANGE": 9,
+      "CLR_BRIGHT_GREEN": 10,
+      "CLR_YELLOW": 11,
+      "CLR_BRIGHT_BLUE": 12,
+      "CLR_BRIGHT_MAGENTA": 13,
+      "CLR_BRIGHT_CYAN": 14,
+      "CLR_WHITE": 15,
+      "CLR_MAX": 16
+    },
+    "COLOR_ATTR": {
+      "18": "HL_ATTCLR_BOLD",
+      "19": "HL_ATTCLR_DIM",
+      "20": "HL_ATTCLR_ITALIC",
+      "21": "HL_ATTCLR_ULINE",
+      "22": "HL_ATTCLR_BLINK",
+      "23": "HL_ATTCLR_INVERSE",
+      "24": "BL_ATTCLR_MAX",
+      "HL_ATTCLR_BOLD": 18,
+      "HL_ATTCLR_DIM": 19,
+      "HL_ATTCLR_ITALIC": 20,
+      "HL_ATTCLR_ULINE": 21,
+      "HL_ATTCLR_BLINK": 22,
+      "HL_ATTCLR_INVERSE": 23,
+      "BL_ATTCLR_MAX": 24
+    },
+    "BL_MASK": {
+      "1": "BL_MASK_BAREH",
+      "2": "BL_MASK_BLIND",
+      "4": "BL_MASK_BUSY",
+      "8": "BL_MASK_CONF",
+      "16": "BL_MASK_DEAF",
+      "32": "BL_MASK_ELF_IRON",
+      "64": "BL_MASK_FLY",
+      "128": "BL_MASK_FOODPOIS",
+      "256": "BL_MASK_GLOWHANDS",
+      "512": "BL_MASK_GRAB",
+      "1024": "BL_MASK_HALLU",
+      "2048": "BL_MASK_HELD",
+      "4096": "BL_MASK_ICY",
+      "8192": "BL_MASK_INLAVA",
+      "16384": "BL_MASK_LEV",
+      "32768": "BL_MASK_PARLYZ",
+      "65536": "BL_MASK_RIDE",
+      "131072": "BL_MASK_SLEEPING",
+      "262144": "BL_MASK_SLIME",
+      "524288": "BL_MASK_SLIPPERY",
+      "1048576": "BL_MASK_STONE",
+      "2097152": "BL_MASK_STRNGL",
+      "4194304": "BL_MASK_STUN",
+      "8388608": "BL_MASK_SUBMERGED",
+      "16777216": "BL_MASK_TERMILL",
+      "33554432": "BL_MASK_TETHERED",
+      "67108864": "BL_MASK_TRAPPED",
+      "134217728": "BL_MASK_UNCONSC",
+      "268435456": "BL_MASK_WOUNDEDL",
+      "536870912": "BL_MASK_HOLDING",
+      "BL_MASK_BAREH": 1,
+      "BL_MASK_BLIND": 2,
+      "BL_MASK_BUSY": 4,
+      "BL_MASK_CONF": 8,
+      "BL_MASK_DEAF": 16,
+      "BL_MASK_ELF_IRON": 32,
+      "BL_MASK_FLY": 64,
+      "BL_MASK_FOODPOIS": 128,
+      "BL_MASK_GLOWHANDS": 256,
+      "BL_MASK_GRAB": 512,
+      "BL_MASK_HALLU": 1024,
+      "BL_MASK_HELD": 2048,
+      "BL_MASK_ICY": 4096,
+      "BL_MASK_INLAVA": 8192,
+      "BL_MASK_LEV": 16384,
+      "BL_MASK_PARLYZ": 32768,
+      "BL_MASK_RIDE": 65536,
+      "BL_MASK_SLEEPING": 131072,
+      "BL_MASK_SLIME": 262144,
+      "BL_MASK_SLIPPERY": 524288,
+      "BL_MASK_STONE": 1048576,
+      "BL_MASK_STRNGL": 2097152,
+      "BL_MASK_STUN": 4194304,
+      "BL_MASK_SUBMERGED": 8388608,
+      "BL_MASK_TERMILL": 16777216,
+      "BL_MASK_TETHERED": 33554432,
+      "BL_MASK_TRAPPED": 67108864,
+      "BL_MASK_UNCONSC": 134217728,
+      "BL_MASK_WOUNDEDL": 268435456,
+      "BL_MASK_HOLDING": 536870912
+    },
+    "ROLE_RACEMASK": {
+      "8": "MH_HUMAN",
+      "16": "MH_ELF",
+      "32": "MH_DWARF",
+      "64": "MH_GNOME",
+      "128": "MH_ORC",
+      "MH_HUMAN": 8,
+      "MH_ELF": 16,
+      "MH_DWARF": 32,
+      "MH_GNOME": 64,
+      "MH_ORC": 128
+    },
+    "ROLE_GENDMASK": {
+      "4096": "ROLE_MALE",
+      "8192": "ROLE_FEMALE",
+      "16384": "ROLE_NEUTER",
+      "ROLE_MALE": 4096,
+      "ROLE_FEMALE": 8192,
+      "ROLE_NEUTER": 16384
+    },
+    "ROLE_ALIGNMASK": {
+      "1": "ROLE_CHAOTIC",
+      "2": "ROLE_NEUTRAL",
+      "4": "ROLE_LAWFUL",
+      "ROLE_LAWFUL": 4,
+      "ROLE_NEUTRAL": 2,
+      "ROLE_CHAOTIC": 1
+    },
+    "blconditions": {
+      "0": "bl_bareh",
+      "1": "bl_blind",
+      "2": "bl_busy",
+      "3": "bl_conf",
+      "4": "bl_deaf",
+      "5": "bl_elf_iron",
+      "6": "bl_fly",
+      "7": "bl_foodpois",
+      "8": "bl_glowhands",
+      "9": "bl_grab",
+      "10": "bl_hallu",
+      "11": "bl_held",
+      "12": "bl_icy",
+      "13": "bl_inlava",
+      "14": "bl_lev",
+      "15": "bl_parlyz",
+      "16": "bl_ride",
+      "17": "bl_sleeping",
+      "18": "bl_slime",
+      "19": "bl_slippery",
+      "20": "bl_stone",
+      "21": "bl_strngl",
+      "22": "bl_stun",
+      "23": "bl_submerged",
+      "24": "bl_termill",
+      "25": "bl_tethered",
+      "26": "bl_trapped",
+      "27": "bl_unconsc",
+      "28": "bl_woundedl",
+      "29": "bl_holding",
+      "30": "CONDITION_COUNT",
+      "bl_bareh": 0,
+      "bl_blind": 1,
+      "bl_busy": 2,
+      "bl_conf": 3,
+      "bl_deaf": 4,
+      "bl_elf_iron": 5,
+      "bl_fly": 6,
+      "bl_foodpois": 7,
+      "bl_glowhands": 8,
+      "bl_grab": 9,
+      "bl_hallu": 10,
+      "bl_held": 11,
+      "bl_icy": 12,
+      "bl_inlava": 13,
+      "bl_lev": 14,
+      "bl_parlyz": 15,
+      "bl_ride": 16,
+      "bl_sleeping": 17,
+      "bl_slime": 18,
+      "bl_slippery": 19,
+      "bl_stone": 20,
+      "bl_strngl": 21,
+      "bl_stun": 22,
+      "bl_submerged": 23,
+      "bl_termill": 24,
+      "bl_tethered": 25,
+      "bl_trapped": 26,
+      "bl_unconsc": 27,
+      "bl_woundedl": 28,
+      "bl_holding": 29,
+      "CONDITION_COUNT": 30
+    },
+    "HL": {
+      "0": "HL_UNDEF",
+      "1": "HL_NONE",
+      "2": "HL_BOLD",
+      "4": "HL_DIM",
+      "8": "HL_ITALIC",
+      "16": "HL_ULINE",
+      "32": "HL_BLINK",
+      "64": "HL_INVERSE",
+      "HL_UNDEF": 0,
+      "HL_NONE": 1,
+      "HL_BOLD": 2,
+      "HL_DIM": 4,
+      "HL_ITALIC": 8,
+      "HL_ULINE": 16,
+      "HL_BLINK": 32,
+      "HL_INVERSE": 64
+    },
+    "MG": {
+      "1": "MG_HERO",
+      "2": "MG_CORPSE",
+      "4": "MG_INVIS",
+      "8": "MG_DETECT",
+      "16": "MG_PET",
+      "32": "MG_RIDDEN",
+      "64": "MG_STATUE",
+      "128": "MG_OBJPILE",
+      "256": "MG_BW_LAVA",
+      "512": "MG_BW_ENGR",
+      "1024": "MG_NOTHING",
+      "2048": "MG_UNEXPL",
+      "4096": "MG_MALE",
+      "8192": "MG_FEMALE",
+      "MG_HERO": 1,
+      "MG_CORPSE": 2,
+      "MG_INVIS": 4,
+      "MG_DETECT": 8,
+      "MG_PET": 16,
+      "MG_RIDDEN": 32,
+      "MG_STATUE": 64,
+      "MG_OBJPILE": 128,
+      "MG_BW_LAVA": 256,
+      "MG_BW_ICE": 512,
+      "MG_BW_SINK": 512,
+      "MG_BW_ENGR": 512,
+      "MG_NOTHING": 1024,
+      "MG_UNEXPL": 2048,
+      "MG_MALE": 4096,
+      "MG_FEMALE": 8192
+    }
+  },
+  "pointers": {
+    "extcmdlist": 2098144,
+    "conditions": 323856,
+    "condtests": 2097312,
+    "roles": 505648,
+    "races": 508512,
+    "genders": 509040,
+    "aligns": 509136
+  },
+  "globals": {
+    "svp": {
+      "plname": "web_user"
+    },
+    "WIN_MAP": -1,
+    "WIN_MESSAGE": -1,
+    "WIN_INVEN": -1,
+    "WIN_STATUS": -1,
+    "iflags": {
+      "window_inited": false,
+      "wc2_hitpointbar": false,
+      "wc_hilite_pet": false,
+      "hilite_pile": false
+    },
+    "flags": {
+      "initrole": -1,
+      "initrace": -1,
+      "initgend": -1,
+      "initalign": -1,
+      "showexp": false,
+      "time": true
+    }
+  },
+  "shimFunctionRunning": "shim_init_nhwindows"
+};
+
+  </script>
+</html>
