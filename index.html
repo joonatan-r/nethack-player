@@ -210,6 +210,9 @@ const upload = document.getElementById("upload");
 const playStartBtn = document.getElementById("playStartBtn");
 
 let combinedData = "";
+let dataParsed = [];
+let resetPlay = false;
+let playing = false;
 
 upload.onchange = e => {
     const loader = new FileReader();
@@ -227,10 +230,21 @@ upload.onchange = e => {
 playStartBtn.onclick = async () => {
     upload.style.display = "none";
     playStartBtn.style.display = "none";
-    const dataParsed = combinedData.trim().split('\n').map(d => JSON.parse(d));
-    for (const d of dataParsed) {
+    dataParsed = combinedData.trim().split('\n').map(d => JSON.parse(d));
+    doReplay();
+};
+
+async function doReplay() {
+    let i = 0;
+    playing = true;
+    for (; i < dataParsed.length; i++) {
+        const d = dataParsed[i];
         if (skip) {
             skip--;
+        }
+        if (resetPlay) {
+            resetPlay = false;
+            i = 0;
         }
         if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
             if (!skip) {
@@ -244,7 +258,8 @@ playStartBtn.onclick = async () => {
             await pausePromise;
         }
     }
-};
+    playing = false;
+}
 
 document.addEventListener("keydown", e => {
     if (e.key === " ") {
@@ -261,6 +276,22 @@ document.addEventListener("keydown", e => {
         skipInput = "";
         if (n && !isNaN(n)) {
             skip = n;
+            if (paused) {
+                pauseResolve();
+                paused = false;
+            } 
+        }
+    } else if (e.key === "ArrowLeft") {
+        skipInput = "";
+        resetPlay = true;
+        windows.splice(0, windows.length); // reset state
+        winCount = 0;
+        if (paused) {
+            pauseResolve();
+            paused = false;
+        }
+        if (!playing) {
+            doReplay();
         }
     } else {
         skipInput += e.key;
