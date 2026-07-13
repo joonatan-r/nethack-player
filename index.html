@@ -114,14 +114,17 @@
             z-index: 10;
             background-color: black;
         }
-        #upload {
+        #controls {
             z-index: 20;
             position: absolute;
         }
     </style>
   </head>
   <body>
-    <input type="file" id="upload"></div>
+    <div id="controls">
+        <button id="playStartBtn">Play</button>
+        <input type="file" id="upload"></div>
+    </div>
     <div id="header"></div>
     <div id="footerMsg"></div>
     <div id="footer"></div>
@@ -204,34 +207,44 @@ const floatBtn = document.getElementById("floatBtn");
 const padDiv = document.getElementById("padDiv");
 const padDiv2 = document.getElementById("padDiv2");
 const upload = document.getElementById("upload");
+const playStartBtn = document.getElementById("playStartBtn");
+
+let combinedData = "";
 
 upload.onchange = e => {
     const loader = new FileReader();
-    loader.onload = async le => {
+    playStartBtn.disabled = true;
+    loader.onload = le => {
         if (le.target.readyState !== 2 || le.target.error) {
             return;
         }
-        upload.style.display = "none";
-        const dataParsed = le.target.result.trim().split('\n').map(d => JSON.parse(d));
-        for (const d of dataParsed) {
-            if (skip) {
-                skip--;
-            }
-            if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
-                if (!skip) {
-                    await new Promise(r => setTimeout(r, 300));
-                }
-            } else if (d.name !== "shim_print_glyph") {
-                // await new Promise(r => setTimeout(r, 10));
-            }
-            await callback(d.name, ...d.args);
-            if (paused) {
-                await pausePromise;
-            }
-        }
+        playStartBtn.disabled = false
+        combinedData += le.target.result;
     }
     loader.readAsText(e.target.files[0]);
 }
+
+playStartBtn.onclick = async () => {
+    upload.style.display = "none";
+    playStartBtn.style.display = "none";
+    const dataParsed = combinedData.trim().split('\n').map(d => JSON.parse(d));
+    for (const d of dataParsed) {
+        if (skip) {
+            skip--;
+        }
+        if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
+            if (!skip) {
+                await new Promise(r => setTimeout(r, 300));
+            }
+        } else if (d.name !== "shim_print_glyph") {
+            // await new Promise(r => setTimeout(r, 10));
+        }
+        await callback(d.name, ...d.args);
+        if (paused) {
+            await pausePromise;
+        }
+    }
+};
 
 document.addEventListener("keydown", e => {
     if (e.key === " ") {
