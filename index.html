@@ -29,14 +29,25 @@
             width: 12px;
             height: 22px;
         }
+        #status {
+            padding: 12px;
+        }
+        #menus {
+            padding-left: 12px;
+        }
         #menus p {
             margin: 0;
             padding: 0;
         }
         #msg {
-            white-space: pre;
+            white-space: pre-wrap;
+            padding-left: 12px;
         }
         #container {
+            display: flex;
+            flex-direction: column;
+        }
+        #subContainer {
             display: flex;
             flex-direction: column;
         }
@@ -48,7 +59,7 @@
             border: 1px solid lightgray;
             overflow: auto;
             overscroll-behavior: contain;
-            font-size: 10px;
+            font-size: 12px;
             z-index: 2;
         }
         #footerMsg {
@@ -133,9 +144,13 @@
     <div id="container">
         <div id="status"></div>
         <div id="padDiv"></div>
-        <div id="root"></div>
-        <div id="msg"></div>
-        <div id="menus"></div>
+        <div id="subContainer">
+            <div id="root"></div>
+            <div id="menuContainer">
+                <div id="msg"></div>
+                <div id="menus"></div>
+            </div>
+        </div>
         <div id="padDiv2"></div>
     </div>
   </body>
@@ -206,6 +221,8 @@ const dialog = document.getElementById("dialog");
 const floatBtn = document.getElementById("floatBtn");
 const padDiv = document.getElementById("padDiv");
 const padDiv2 = document.getElementById("padDiv2");
+const subContainer = document.getElementById("subContainer");
+const menuContainer = document.getElementById("menuContainer");
 const upload = document.getElementById("upload");
 const playStartBtn = document.getElementById("playStartBtn");
 
@@ -239,9 +256,6 @@ async function doReplay() {
     playing = true;
     for (; i < dataParsed.length; i++) {
         const d = dataParsed[i];
-        if (skip) {
-            skip--;
-        }
         if (resetPlay) {
             resetPlay = false;
             i = 0;
@@ -249,14 +263,16 @@ async function doReplay() {
         if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
             if (!skip) {
                 await new Promise(r => setTimeout(r, 300));
+            } else {
+                skip--;
             }
         } else if (d.name !== "shim_print_glyph") {
             // await new Promise(r => setTimeout(r, 10));
         }
-        await callback(d.name, ...d.args);
         if (paused) {
             await pausePromise;
         }
+        await callback(d.name, ...d.args);
     }
     playing = false;
 }
@@ -299,6 +315,7 @@ document.addEventListener("keydown", e => {
 });
 
 if (mobile) {
+    menuContainer.style.display = "none";
     msg = footerMsg;
     menus = dialog;
     status = header;
@@ -398,6 +415,11 @@ if (mobile) {
     footer.style.display = "none";
     dialog.style.display = "none";
     floatBtn.style.display = "none";
+    document.body.style.backgroundColor = "black";
+    root.style.border = "1px solid white";
+    subContainer.style.flexDirection = "row";
+    menuContainer.style.display = "flex";
+    menuContainer.style.flexDirection = "column";
     document.onkeydown = e => handleKey(e.key, e.ctrlKey, e.altKey, e.location === 3);
 }
 
@@ -410,6 +432,11 @@ for (let i = 0; i < rowno; i++) {
 }
 
 root.style.width = `${colno * 12}px`;
+
+if (!mobile) {
+    root.style.minWidth = `${colno * 12}px`;
+    root.style.height = `${rowno * 22}px`;
+}
 
 async function callback(name, ...args) {
     let key;
@@ -579,7 +606,7 @@ async function callback(name, ...args) {
             id = `menu_${args[0]}`;
             menuText = document.getElementById(`${id}_text`);
             if (menuText) {
-                menuText.innerHTML += "\n" + args[1];
+                menuText.innerHTML = args[1] + "\n" + menuText.innerHTML;
             }
             return 0;
         case "shim_clear_nhwindow":
@@ -619,7 +646,7 @@ function newMsg(text, add) {
         prevMsgs.push(msg.innerHTML);
     }
     if (add) {
-        if (mobile && msg.innerHTML === "") {
+        if (msg.innerHTML === "") {
             msg.innerHTML += text;
         } else {
             msg.innerHTML += "\n" + text;
@@ -641,11 +668,15 @@ function updateStatus(args) {
         condsMap[field] = condsMapUpdate[field];
     }
     for (const field of Object.keys(statusMap)) {
-        status.innerHTML += `${field}: ${statusMap[field] || "-"} `;
+        if ((field === "Hunger" || field === "Cap") && statusMap[field]) {
+            status.innerHTML += `${field}: <span style="color:orange">${statusMap[field]} </span>`;
+        } else {
+            status.innerHTML += `${field}: ${statusMap[field] || "-"} `;
+        }
     }
     for (const cond of Object.keys(condsMap)) {
         if (condsMap[cond]) {
-            status.innerHTML += `${cond} `;
+            status.innerHTML += `<span style="color:orange">${cond} </span>`;
         }
     }
     if (statusMap["Hpmax"]) {
@@ -1205,6 +1236,9 @@ function handleKey(inputKey, ctrlKey, metaKey, numPad) {
                 inputResolve(1);
             } else if (inputKey === 'Escape') {
                 inputResolve(-1);
+            } else if (inputKey === 'Backspace') {
+                cmdInput = cmdInput.slice(0, -1);
+                msg.innerHTML = cmdInput;
             } else if (inputKey.length === 1) {
                 cmdInput += inputKey;
                 // NOTE: history should already be handled
