@@ -230,6 +230,12 @@ let combinedData = "";
 let dataParsed = [];
 let resetPlay = false;
 let playing = false;
+let pauseAfterSkip = false;
+let actionIdx = 0;
+let loading = false;
+let playInfo = "";
+
+upload.value = null;
 
 upload.onchange = e => {
     const loader = new FileReader();
@@ -259,6 +265,7 @@ async function doReplay() {
         if (resetPlay) {
             resetPlay = false;
             i = 0;
+            actionIdx = 0;
         }
         if (d.name === "shim_nhgetch" || d.name === "shim_nh_poskey") {
             if (!skip) {
@@ -266,15 +273,34 @@ async function doReplay() {
             } else {
                 skip--;
             }
+            actionIdx++;
         } else if (d.name !== "shim_print_glyph") {
             // await new Promise(r => setTimeout(r, 10));
         }
+        if (pauseAfterSkip && !paused && !skip) {
+            pauseAfterSkip = false;
+            pausePromise = new Promise(r => { pauseResolve = r; });
+            paused = true;
+        }
+        if (skip) {
+            if (!loading) {
+                loading = true;
+                updatePlayInfo("Loading...");
+                await new Promise(r => setTimeout(r, 0)); // flush the text change to screen
+            }
+        } else {
+            loading = false;
+            updatePlayInfo(`Paused: ${paused}, Skip amount: ${skipInput || '-'}, Current index: ${actionIdx}`);
+        }
         if (paused) {
             await pausePromise;
+            paused = false;
         }
         await callback(d.name, ...d.args);
     }
     playing = false;
+    loading = false;
+    skip = 0;
 }
 
 document.addEventListener("keydown", e => {
@@ -283,28 +309,31 @@ document.addEventListener("keydown", e => {
             pauseResolve();
         } else {
             pausePromise = new Promise(r => { pauseResolve = r; });
+            paused = true;
         }
-        paused = !paused;
     } else if (e.key === "Escape") {
         skipInput = "";
     } else if (e.key === "ArrowRight") {
-        const n = Number(skipInput)
-        skipInput = "";
+        const n = Number(skipInput);
         if (n && !isNaN(n)) {
             skip = n;
             if (paused) {
                 pauseResolve();
-                paused = false;
+                pauseAfterSkip = true;
             } 
         }
     } else if (e.key === "ArrowLeft") {
-        skipInput = "";
+        // go to beginning, then skip to n backwards from where we were
+        const n = Number(skipInput);
+        if (n && !isNaN(n)) {
+            skip = Math.max(actionIdx - n, 0);
+        }
         resetPlay = true;
         windows.splice(0, windows.length); // reset state
         winCount = 0;
         if (paused) {
             pauseResolve();
-            paused = false;
+            pauseAfterSkip = true;
         }
         if (!playing) {
             doReplay();
@@ -312,7 +341,24 @@ document.addEventListener("keydown", e => {
     } else {
         skipInput += e.key;
     }
+    if (!loading) {
+        updatePlayInfo(`Paused: ${paused}, Skip amount: ${skipInput || '-'}, Current index: ${actionIdx}`)
+    }
 });
+
+function updatePlayInfo(info) {
+    playInfo = info;
+    if (msg.innerHTML.startsWith("<span")) {
+        const oldParts = msg.innerHTML.split("\n");
+        if (oldParts.length > 1) {
+            msg.innerHTML = `<span style="color:yellow">${playInfo}</span>\n` + oldParts.slice(1).join("\n");
+        } else {
+            msg.innerHTML = `<span style="color:yellow">${playInfo}</span>\n`;
+        }
+    } else {
+        msg.innerHTML = `<span style="color:yellow">${playInfo}</span>\n` + msg.innerHTML;
+    }
+}
 
 if (mobile) {
     menuContainer.style.display = "none";
@@ -522,6 +568,10 @@ async function callback(name, ...args) {
             if (!skip) {
                 await new Promise(r => setTimeout(r, 500));
             }
+            if (paused) {
+                await pausePromise;
+                paused = false;
+            }
             if (useDialog) {
                 document.getElementById("yn_elem")?.remove();
                 closeDialogIfEmpty();
@@ -552,6 +602,10 @@ async function callback(name, ...args) {
             if (!skip) {
                 await new Promise(r => setTimeout(r, 500));
             }
+            if (paused) {
+                await pausePromise;
+                paused = false;
+            }
             newMsg("");
             return 0;
         case "shim_display_nhwindow":
@@ -562,6 +616,10 @@ async function callback(name, ...args) {
                 addBaseDialogOptions(args[0]);
                 if (!skip) {
                     await new Promise(r => setTimeout(r, 500));
+                }
+                if (paused) {
+                    await pausePromise;
+                    paused = false;
                 }
             }
             return 0;
@@ -599,6 +657,10 @@ async function callback(name, ...args) {
             }
             if (!skip) {
                 await new Promise(r => setTimeout(r, 500));
+            }
+            if (paused) {
+                await pausePromise;
+                paused = false;
             }
             destroyMenu(args[0]);
             return -1;
@@ -652,7 +714,7 @@ function newMsg(text, add) {
             msg.innerHTML += "\n" + text;
         }
     } else {
-        msg.innerHTML = text;
+        msg.innerHTML = `<span style="color:yellow">${playInfo}</span>\n` + text;
     }
 }
 
