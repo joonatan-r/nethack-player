@@ -303,17 +303,17 @@ async function doReplay() {
     skip = 0;
 }
 
-document.addEventListener("keydown", e => {
-    if (e.key === " ") {
+function handlePlayControlKey(key) {
+    if (key === " ") {
         if (paused) {
             pauseResolve();
         } else {
             pausePromise = new Promise(r => { pauseResolve = r; });
             paused = true;
         }
-    } else if (e.key === "Escape") {
+    } else if (key === "Escape") {
         skipInput = "";
-    } else if (e.key === "ArrowRight") {
+    } else if (key === "ArrowRight" || key === "l") {
         const n = Number(skipInput);
         if (n && !isNaN(n)) {
             skip = n;
@@ -322,7 +322,7 @@ document.addEventListener("keydown", e => {
                 pauseAfterSkip = true;
             } 
         }
-    } else if (e.key === "ArrowLeft") {
+    } else if (key === "ArrowLeft" || key === "h") {
         // go to beginning, then skip to n backwards from where we were
         const n = Number(skipInput);
         if (n && !isNaN(n)) {
@@ -339,12 +339,12 @@ document.addEventListener("keydown", e => {
             doReplay();
         }
     } else {
-        skipInput += e.key;
+        skipInput += key;
     }
     if (!loading) {
         updatePlayInfo(`Paused: ${paused}, Skip amount: ${skipInput || '-'}, Current index: ${actionIdx}`)
     }
-});
+}
 
 function updatePlayInfo(info) {
     playInfo = info;
@@ -1292,6 +1292,7 @@ function centerIfMobile() {
 }
 
 function handleKey(inputKey, ctrlKey, metaKey, numPad) {
+    handlePlayControlKey(inputKey);
     if (inputResolve) {
         if (isCmdInput) {
             if (inputKey === 'Enter') {
